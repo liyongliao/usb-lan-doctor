@@ -6,12 +6,21 @@ BT="$SDK/build-tools/35.0.0"
 ANDROID="$SDK/platforms/android-35/android.jar"
 export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home -v 17)}"
 export PATH="$JAVA_HOME/bin:$PATH"
-mkdir -p build/classes build/dex
+mkdir -p build/classes build/dex lib
+for artifact in api provider aidl shared; do
+ archive="lib/$artifact-13.1.5.aar"
+ [ -f "$archive" ] || curl -fL "https://repo.maven.apache.org/maven2/dev/rikka/shizuku/$artifact/13.1.5/$artifact-13.1.5.aar" -o "$archive"
+done
+[ -f lib/annotation-1.3.0.jar ] || curl -fL https://dl.google.com/dl/android/maven2/androidx/annotation/annotation/1.3.0/annotation-1.3.0.jar -o lib/annotation-1.3.0.jar
+shasum -a 256 -c third_party/dependencies.sha256
+for artifact in api provider aidl shared; do unzip -p "lib/$artifact-13.1.5.aar" classes.jar > "lib/$artifact-13.1.5.jar"; done
+cp third_party/Shizuku-LICENSE assets/Shizuku-LICENSE
+CP="$ANDROID:lib/api-13.1.5.jar:lib/provider-13.1.5.jar:lib/aidl-13.1.5.jar:lib/shared-13.1.5.jar:lib/annotation-1.3.0.jar"
 "$BT/aapt2" compile --dir res -o build/resources.zip
 "$BT/aapt2" link -o build/base.apk -I "$ANDROID" --manifest AndroidManifest.xml --java build/generated -A assets build/resources.zip
-javac -encoding UTF-8 --release 8 -classpath "$ANDROID" -d build/classes src/cn/usbdoctor/*.java
+javac -encoding UTF-8 --release 8 -classpath "$CP" -d build/classes src/cn/usbdoctor/*.java build/generated/cn/usbdoctor/R.java
 jar cf build/classes.jar -C build/classes .
-"$BT/d8" --lib "$ANDROID" --min-api 26 --output build/dex build/classes.jar
+"$BT/d8" --lib "$ANDROID" --min-api 26 --output build/dex build/classes.jar lib/*.jar
 cp build/base.apk build/unsigned.apk
 (cd build/dex && zip -q -u ../unsigned.apk classes.dex)
 "$BT/zipalign" -f -p 4 build/unsigned.apk build/aligned.apk

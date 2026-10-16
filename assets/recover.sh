@@ -1,7 +1,8 @@
 #!/system/bin/sh
 # Never accepts arbitrary paths, drivers, interfaces or shell commands.
 set -u
-[ "$(id -u)" = 0 ] || { echo '需要 Root 授权'; exit 10; }
+uid=$(id -u)
+[ "$uid" = 0 ] || [ "$uid" = 2000 ] || { echo '需要 Root 或 Shizuku / ADB 授权'; exit 10; }
 action=${1:-}; name=${2:-}; expected=${3:-}
 case "$action" in
  host|cycle)
@@ -9,7 +10,7 @@ case "$action" in
   case "$port" in ''|*[!a-zA-Z0-9_.:-]*) echo '端口名称无效'; exit 11;; esac
   ports=$(dumpsys usb)
   printf '%s\n' "$ports"
-  printf '%s\n' "$ports" | grep -F "id=$port" >/dev/null || { echo '真实端口不存在，未执行'; exit 12; }
+  printf '%s\n' "$ports" | tr '{},' '\n\n\n' | sed -n 's/^[[:space:]]*id=\([^[:space:]]*\)[[:space:]]*$/\1/p' | grep -Fx "$port" >/dev/null || { echo '真实端口不存在，未执行'; exit 12; }
   printf '%s\n' "$ports" | grep -q 'is_simulation_active=true' && { echo '检测到模拟端口，拒绝操作'; exit 13; }
   if [ "$action" = host ]; then
    dumpsys usb set-port-roles "$port" source host || exit 14
@@ -20,7 +21,7 @@ case "$action" in
    trap restore EXIT HUP INT TERM
    dumpsys usb enable-usb-data "$port" false || exit 15
    sleep 2
-   restore
+   restore || exit 24
    trap - EXIT HUP INT TERM
    echo 'USB 数据连接重启请求已发送；旧 USB HAL 可能不支持，请查看端口和日志。'
   fi
@@ -30,6 +31,7 @@ case "$action" in
  power|auto|reauth|probe) ;;
  *) echo '不支持的操作'; exit 16;;
 esac
+[ "$uid" = 0 ] || { echo '此操作需要 Root；Shizuku 的 ADB 权限不能写入内核 USB 控制节点'; exit 10; }
 case "$name" in ''|*[!0-9.-]*|*-*-*) echo 'USB 地址无效'; exit 17;; esac
 printf '%s\n' "$name" | grep -Eq '^[0-9]+-[0-9]+(\.[0-9]+)*$' || exit 17
 d="/sys/bus/usb/devices/$name"

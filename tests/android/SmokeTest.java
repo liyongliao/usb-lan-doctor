@@ -13,7 +13,7 @@ public class SmokeTest extends Instrumentation {
     void awaitIdle()throws Exception{for(int i=0;i<120 && busy();i++)Thread.sleep(500);check(!busy(),"operation timed out");}
     @Override public void onStart(){Bundle result=new Bundle();try{
         Intent i=new Intent(Intent.ACTION_MAIN).setClassName("cn.usbdoctor","cn.usbdoctor.MainActivity").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        activity=(MainActivity)startActivitySync(i);awaitIdle();runOnMainSync(()->activity.monitor.setChecked(false));
+        ActivityMonitor monitor=addMonitor("cn.usbdoctor.MainActivity",null,false);getTargetContext().startActivity(i);activity=(MainActivity)waitForMonitorWithTimeout(monitor,15000);check(activity!=null,"launch");Thread.sleep(500);awaitIdle();runOnMainSync(()->{activity.monitor.setChecked(false);activity.mode=2;});
         check(activity.root,"Root authorization missing");
         MainActivity.Result uid=activity.shell("id -u",true,10);check(uid.code==0 && uid.text.trim().equals("0"),"Root uid != 0");
         String real=activity.collectSnapshot();check(real.contains("ROOT|yes"),"root snapshot missing");
@@ -38,7 +38,7 @@ public class SmokeTest extends Instrumentation {
         File report=new File(getTargetContext().getExternalFilesDir(null),"smoke-report.txt");
         try(FileOutputStream f=new FileOutputStream(report)){f.write(activity.latest.getBytes(StandardCharsets.UTF_8));}
         result.putString("stream","PASS: Root uid=0; real USB port; current role parsing; RTL8156 bound/unbound; USB vs Ethernet speeds; actual-shell input guard; full diagnostics. Report: "+report.getAbsolutePath());
-        runOnMainSync(()->{activity.monitor.setChecked(true);activity.event("实机测试通过：Root / 端口 / 状态解析 / 完整诊断 / 参数保护");});
+        runOnMainSync(()->{activity.mode=1;activity.saveMode();activity.monitor.setChecked(true);activity.event("实机测试通过：Root / 端口 / 状态解析 / 完整诊断 / 参数保护");});
         finish(Activity.RESULT_OK,result);
     }catch(Throwable t){result.putString("stream","FAIL: "+t);finish(Activity.RESULT_CANCELED,result);}}
 }

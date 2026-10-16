@@ -23,8 +23,8 @@ for n in /sys/class/net/*; do
  echo "NET|$name|$state|$carrier|$speed|$duplex"
 done
 for r in /sys/class/usb_role/*/role; do [ -f "$r" ] && echo "ROLE|$r|$(cat "$r" 2>/dev/null)"; done
-if [ "$(id -u)" = 0 ]; then
- echo 'ROOT|yes'
- dumpsys usb 2>&1
-fi
+uid=$(id -u)
+echo "UID|$uid"
+if [ "$uid" = 0 ]; then echo 'ROOT|yes'; else echo 'ROOT|no'; fi
+if [ "$uid" = 0 ] || [ "$uid" = 2000 ]; then dumpsys usb 2>&1; fi
 exit 0
