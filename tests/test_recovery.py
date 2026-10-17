@@ -15,8 +15,24 @@ class RecoveryTests(unittest.TestCase):
         for name,body in {'id':'echo ${FAKE_UID:-0}', 'sleep':':', 'dumpsys':'echo "$*" >> "$CALL_LOG"; echo "is_simulation_active=${SIMULATED:-false}"; echo "id=${ACTUAL_PORT:-port0}"; if [ "${FAIL_HOST:-0}" = 1 ] && [ "${2:-}" = set-port-roles ]; then exit 1; fi'}.items():
             p=self.bin/name; p.write_text('#!/bin/sh\n'+body+'\n'); p.chmod(0o755)
         self.script=self.base/'recover.sh'
-        self.script.write_text(SCRIPT.read_text().replace('/sys/bus/usb',str(self.sys)))
-        self.env=dict(os.environ,PATH=str(self.bin)+':'+os.environ['PATH'],CALL_LOG=str(self.base/'calls'))
+        self.script.write_text(SCRIPT.read_text().replace('/sys/bus/usb',str(self.sys)).replace('/sys/class/net',str(self.base/'net')))
+        self.env=dict(os.environ,PATH=str(self.bin)+':'+os.environ['PATH'],CALL_LOG=str(self.base/'calls'),NET_ROOT=str(self.base/'net'))
+        ip=self.bin/'ip'
+        ip.write_text('''#!/bin/sh
+echo "ip $*" >> "$CALL_LOG"
+if [ "$1" = link ]; then
+ n="$NET_ROOT/$4"
+ if [ "$5" = down ]; then
+  [ "${FAIL_DOWN:-0}" = 1 ] && exit 1
+  echo 0x1002 > "$n/flags"
+  [ "${REPLACE_ON_DOWN:-0}" = 1 ] && echo 99 > "$n/ifindex"
+ else
+  if [ "${FAIL_UP_ONCE:-0}" = 1 ] && [ ! -f "$NET_ROOT/failed" ]; then touch "$NET_ROOT/failed"; exit 1; fi
+  echo 0x1003 > "$n/flags"
+ fi
+fi
+exit 0
+''');ip.chmod(0o755)
     def tearDown(self): self.tmp.cleanup()
     def run_action(self,action,name='1-1',identity='0bda:8156',code=0):
         p=subprocess.run(['/bin/sh',str(self.script),action,name,identity],env=self.env,capture_output=True,text=True)
@@ -57,10 +73,49 @@ class RecoveryTests(unittest.TestCase):
         self.env['FAKE_UID']='2000';self.run_action('cycle',name='port0');calls=(self.base/'calls').read_text();self.assertLess(calls.index('port0 false'),calls.index('port0 true'))
     def test_adb_denied_all_kernel_writes(self):
         self.env['FAKE_UID']='2000'
-        for action in ['reauth','power','auto','probe']: self.run_action(action,code=10)
+        for action in ['reauth','power','auto','probe','linkup','linkreset']: self.run_action(action,code=10)
         self.assertEqual((self.dev/'authorized').read_text().strip(),'1');self.assertEqual((self.dev/'power/control').read_text().strip(),'auto')
     def test_port_prefix_cannot_match_another_port(self):
         self.env['ACTUAL_PORT']='port01';self.run_action('host',name='port0',code=12)
     def test_system_role_request_failure_not_success(self):
         self.env['FAIL_HOST']='1';self.run_action('host',name='port0',code=14)
+    def add_net(self, name='eth0', flags='0x1003'):
+        iface=self.dev/'1-1:1.0';(iface/'net'/name).mkdir(parents=True,exist_ok=True)
+        n=self.base/'net'/name;n.mkdir(parents=True)
+        (n/'device').symlink_to(iface)
+        for f,v in {'ifindex':'12','flags':flags,'carrier':'0','operstate':'down','speed':'-1'}.items(): (n/f).write_text(v+'\n')
+        return n
+    def test_enable_only_selected_usb_interface(self):
+        n=self.add_net(flags='0x1002');self.run_action('linkup')
+        calls=(self.base/'calls').read_text();self.assertIn('ip link set dev eth0 up',calls);self.assertNotIn(' down',calls)
+        self.assertEqual((n/'flags').read_text().strip(),'0x1003')
+    def test_restart_interface_down_then_up_without_claiming_connected(self):
+        self.add_net();p=self.run_action('linkreset');calls=(self.base/'calls').read_text()
+        self.assertLess(calls.index('eth0 down'),calls.index('eth0 up'));self.assertIn('carrier=0',p.stdout)
+        self.assertIn('不将命令成功等同于网络恢复',p.stdout)
+    def test_link_no_interface(self): self.run_action('linkreset',code=26)
+    def test_link_multiple_interfaces_rejected(self):
+        self.add_net();self.add_net('eth1');self.run_action('linkreset',code=26);self.assertFalse((self.base/'calls').exists())
+    def test_link_non_usb_target_rejected(self):
+        n=self.add_net();(n/'device').unlink();(n/'device').symlink_to(self.base)
+        self.run_action('linkreset',code=28);self.assertFalse((self.base/'calls').exists())
+    def test_link_up_failure_restores_original_up(self):
+        n=self.add_net();self.env['FAIL_UP_ONCE']='1';self.run_action('linkreset',code=30)
+        self.assertEqual((n/'flags').read_text().strip(),'0x1003')
+        self.assertEqual((self.base/'calls').read_text().count('eth0 up'),2)
+    def test_link_initial_down_is_left_down_on_failure(self):
+        n=self.add_net(flags='0x1002');self.env['FAIL_UP_ONCE']='1';self.run_action('linkreset',code=30)
+        self.assertEqual((n/'flags').read_text().strip(),'0x1002')
+    def test_link_replacement_during_restart_never_brought_up(self):
+        self.add_net();self.env['REPLACE_ON_DOWN']='1';self.run_action('linkreset',code=28)
+        self.assertNotIn('eth0 up',(self.base/'calls').read_text())
+    def test_link_down_failure_restores_and_reports_failure(self):
+        self.add_net();self.env['FAIL_DOWN']='1';self.run_action('linkreset',code=29)
+        self.assertIn('eth0 up',(self.base/'calls').read_text())
+    def test_link_invalid_flags_rejected(self):
+        self.add_net(flags='garbage');self.run_action('linkreset',code=28);self.assertFalse((self.base/'calls').exists())
+    def test_link_invalid_name_rejected(self):
+        self.add_net(name='eth0;bad');self.run_action('linkreset',code=27);self.assertFalse((self.base/'calls').exists())
+    def test_link_wrong_usb_identity_rejected(self):
+        self.add_net();self.run_action('linkreset',identity='0bda:8153',code=19);self.assertFalse((self.base/'calls').exists())
 if __name__=='__main__': unittest.main(verbosity=2)

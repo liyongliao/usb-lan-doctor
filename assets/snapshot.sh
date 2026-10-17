@@ -20,7 +20,8 @@ for n in /sys/class/net/*; do
  case "$path" in */usb[0-9]*/*) ;; *) continue;; esac
  name=${n##*/}; state=$(cat "$n/operstate" 2>/dev/null); carrier=$(cat "$n/carrier" 2>/dev/null)
  speed=$(cat "$n/speed" 2>/dev/null); duplex=$(cat "$n/duplex" 2>/dev/null)
- echo "NET|$name|$state|$carrier|$speed|$duplex"
+ flags=$(cat "$n/flags" 2>/dev/null)
+ echo "NET|$name|$state|$carrier|$speed|$duplex|$flags"
 done
 for r in /sys/class/usb_role/*/role; do [ -f "$r" ] && echo "ROLE|$r|$(cat "$r" 2>/dev/null)"; done
 uid=$(id -u)

@@ -17,7 +17,7 @@ final class ShizukuBridge {
         public void onServiceConnected(ComponentName name,IBinder binder){if(closed)return;service=binder;binding=false;notifyChanged();}
         public void onServiceDisconnected(ComponentName name){service=null;binding=false;notifyChanged();}
     };
-    ShizukuBridge(Context context,Runnable changed){this.context=context;this.changed=changed;args=new Shizuku.UserServiceArgs(new ComponentName(context,PrivilegedService.class)).daemon(false).processNameSuffix("usb_worker").version(2);
+    ShizukuBridge(Context context,Runnable changed){this.context=context;this.changed=changed;args=new Shizuku.UserServiceArgs(new ComponentName(context,PrivilegedService.class)).daemon(false).processNameSuffix("usb_worker").version(3);
         Shizuku.addBinderReceivedListenerSticky(received);Shizuku.addBinderDeadListener(died);Shizuku.addRequestPermissionResultListener(permission);
     }
     void notifyChanged(){main.post(()->{if(!closed)changed.run();});}

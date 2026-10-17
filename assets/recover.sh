@@ -28,10 +28,10 @@ case "$action" in
   sleep 3
   dumpsys usb
   exit 0;;
- power|auto|reauth|probe) ;;
+ power|auto|reauth|probe|linkup|linkreset) ;;
  *) echo '不支持的操作'; exit 16;;
 esac
-[ "$uid" = 0 ] || { echo '此操作需要 Root；Shizuku 的 ADB 权限不能写入内核 USB 控制节点'; exit 10; }
+[ "$uid" = 0 ] || { echo '此操作需要 Root；Shizuku 的 ADB 权限不能控制网卡接口或写入内核 USB 控制节点'; exit 10; }
 case "$name" in ''|*[!0-9.-]*|*-*-*) echo 'USB 地址无效'; exit 17;; esac
 printf '%s\n' "$name" | grep -Eq '^[0-9]+-[0-9]+(\.[0-9]+)*$' || exit 17
 d="/sys/bus/usb/devices/$name"
@@ -48,6 +48,54 @@ for i in "$d"/*:*; do
 done
 [ "$network" = yes ] || { echo '未确认是受支持的网卡，拒绝修改'; exit 21; }
 case "$action" in
+ linkup|linkreset)
+  # Derive the interface from the selected USB device; never accept an arbitrary name.
+  count=0; net=''; iface=''
+  for i in "$d"/*:*; do
+   for n in "$i"/net/*; do
+    [ -d "$n" ] || continue
+    count=$((count + 1)); net=${n##*/}; iface=$i
+   done
+  done
+  [ "$count" = 1 ] || { echo "此网卡发现 $count 个网络接口，仅支持明确的单接口设备；未修改"; exit 26; }
+  case "$net" in ''|*[!a-zA-Z0-9_.-]*) echo '接口名称无效'; exit 27;; esac
+  n="/sys/class/net/$net"
+  index=$(cat "$n/ifindex" 2>/dev/null)
+  case "$index" in ''|*[!0-9]*) echo '无法确认接口身份'; exit 28;; esac
+  same_interface() {
+   [ "$(cat "$d/idVendor" 2>/dev/null):$(cat "$d/idProduct" 2>/dev/null)" = "$expected" ] &&
+   [ "$(cat "$n/ifindex" 2>/dev/null)" = "$index" ] &&
+   [ "$(readlink -f "$n/device" 2>/dev/null)" = "$(readlink -f "$iface" 2>/dev/null)" ]
+  }
+  same_interface || { echo '接口已移除或不属于选定网卡'; exit 28; }
+  flags=$(cat "$n/flags" 2>/dev/null)
+  case "$flags" in 0x*) hex=${flags#0x};; *) echo '无法读取接口管理状态'; exit 28;; esac
+  case "$hex" in ''|*[!0-9a-fA-F]*) echo '接口管理状态无效'; exit 28;; esac
+  was_up=$((flags & 1))
+  restore_link() {
+   if [ "$was_up" = 1 ]; then
+    if same_interface; then ip link set dev "$net" up || echo '恢复原 UP 状态失败，请重新检查接口';
+    else echo '接口身份变化，未向替换设备发送恢复命令'; fi
+   fi
+  }
+  if [ "$action" = linkreset ]; then
+   trap restore_link EXIT
+   trap 'exit 31' HUP INT TERM
+   same_interface || exit 28
+   ip link set dev "$net" down || exit 29
+   sleep 1
+  fi
+  same_interface || { echo '接口身份变化，停止操作'; exit 28; }
+  ip link set dev "$net" up || { echo '启用接口失败'; exit 30; }
+  trap - EXIT HUP INT TERM
+  echo "已请求 $net 启用；观察 6 秒，不将命令成功等同于网络恢复。"
+  for tick in 1 2 3; do
+   sleep 2
+   same_interface || { echo '观察期间设备已移除或接口身份变化'; exit 28; }
+   echo "观察 $tick: flags=$(cat "$n/flags" 2>&1) operstate=$(cat "$n/operstate" 2>&1) carrier=$(cat "$n/carrier" 2>&1) speed=$(cat "$n/speed" 2>&1)"
+  done
+  ip address show dev "$net"
+  ;;
  power) echo on > "$d/power/control" || exit 22; echo "本次连接已禁用网卡自动休眠：$(cat "$d/power/control")";;
  auto) echo auto > "$d/power/control" || exit 22; echo "已设置自动电源管理：$(cat "$d/power/control")";;
  reauth)
